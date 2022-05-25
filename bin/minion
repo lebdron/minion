@@ -13,6 +13,7 @@ use Minion::Aws;
 use Minion::Aws::Fleet;
 use Minion::Aws::Image;
 use Minion::Aws::Instance;
+use Minion::Pos::Allocation;
 use Minion::Run::Runner;
 use Minion::StaticFleet;
 
@@ -77,7 +78,17 @@ my $BOOT_DURATION = 36000;
 my $BOOT_SECGROUP = 'default';
 my $BOOT_TYPE     = 'c5.4xlarge';
 my $BOOT_DISK     = undef;
-my @BOOT_INSTALLS = ();
+my @BOOT_INSTALLS = (
+	[ 'install-algorand'  ],
+    [ 'install-avalanche' ],
+    [ 'install-diablo'    ],
+    [ 'install-diem'    ],
+    [ 'install-poa'       ],
+    [ 'install-quorum'    ],
+    [ 'install-solang'    ],
+    [ 'install-solana'    ],
+    [ 'install-solidity'  ]
+);
 my @BOOT_REGIONS  = @PREPARE_REGIONS;
 
 
@@ -632,6 +643,464 @@ sub run
 	);
 }
 
+# Pos Run action ------------------------------------------------------------------
+
+sub _pos_run
+{
+    my ($chain, $workload, $fids, %params) = @_;
+    my (%fleets, $region, $fleet, $instance, $proc, $pgrp, $runner, $job, $wd);
+    my ($gfleet, $primary, $diablo, $nodes, $out, $err, $pid);
+    my ($dir, $base, $full, $compress, $fh);
+
+    if ($params{RESULT} =~ m!^(.*/)?([^/]+)(\.(?:tar\.|t)(?:gz|xz|bzip2))$!) {
+	($dir, $base, $compress) = ($1, $2, $3);
+    } elsif ($params{RESULT} =~ m!^(.*/)?([^/]+)(\.(?:gz|xz|bzip2))$!) {
+	($dir, $base, $compress) = ($1, $2, $3);
+    } elsif ($params{RESULT} =~ m!^(.*/)?([^/]+)$!) {
+	($dir, $base) = ($1, $2);
+	$compress = undef;
+    } else {
+	fatal("failed to parse result path '%s'", $params{RESULT});
+    }
+
+    if (defined($dir)) {
+	$full = $dir . $base;
+    } else {
+	$full = $base;
+    }
+
+    if (-e $full) {
+	fatal("result '%s' already exists", $full);
+    }
+
+    if (-e $params{RESULT}) {
+	fatal("result '%s' already exists", $params{RESULT});
+    }
+
+	my %aopts;
+	$aopts{LOG} = \&cmdlog;
+	$aopts{NODES} = $params{NODES};
+
+	my $allocation = Minion::Pos::Allocation->new($params{ALLOCATION}, %aopts);
+	$fleet = Minion::StaticFleet->new([ $allocation->nodes() ]);
+	$fleets{(keys(%$fids))[0]} = $fleet;
+
+    $pgrp = Minion::System::Pgroup->new([]);
+
+    foreach $region (keys(%fleets)) {
+	if ($fleets{$region}->can('instances')) {
+	    message("fetching '%s' in '%s'", $fids->{$region}, $region);
+	    $proc = $fleets{$region}->instances();
+	    $pgrp->add($proc);
+	}
+    }
+
+    map { $_->get() } $pgrp->waitall();
+
+    $pgrp = Minion::System::Pgroup->new([]);
+
+    foreach $region (keys(%fleets)) {
+	foreach $instance ($fleets{$region}->members()) {
+	    message("joining: %s ('%s') ...", $instance->host(), $region);
+
+	    $proc = Minion::System::Process->new(sub {
+		while ($instance->execute(
+			   [ 'true' ],
+			   STDERR => '/dev/null'
+		       )->wait()) {
+		    sleep(1);
+		}
+	    });
+
+	    $pgrp->add($proc);
+	}
+    }
+
+    $pgrp->waitall();
+
+    $gfleet = Minion::StaticFleet->new([
+	map { $_->members() } values(%fleets)
+    ]);
+
+    $diablo = Minion::StaticFleet->new([
+	map { ($_->members())[0] } values(%fleets)
+    ]);
+
+    $primary = ($diablo->members())[0];
+
+    $nodes = Minion::StaticFleet->new([
+	map { ($_->members())[1 .. (scalar($_->members())-1)] } values(%fleets)
+    ]);
+
+    if (grep { $_ eq 'boot' } @{$params{BREAKPOINTS}}) {
+	printf("breakpoint: boot\n");
+	printf("press ENTER to continue or Ctrl-C to stop");
+	local $| = 1;
+	<STDIN>;
+    }
+
+    $runner = Minion::Run::Runner->new(
+	LOCAL  => [ 'script/local/'  ],
+	REMOTE => [ 'script/remote/' ]
+	);
+
+    if (scalar(@{$params{INSTALLS}}) > 0) {
+	unshift(@{$params{INSTALLS}}, [ 'prepare-install' ]);
+    }
+
+    foreach $job (@{$params{INSTALLS}}) {
+	message("running: '%s' ...", join(' ', @$job));
+
+	$out = '';
+	$err = '';
+	$proc = $runner->run(
+	    $gfleet, $job,
+	    STDOUT  => runlog(\$out), STDERR  => runlog(\$err),
+	    STDOUTS => runlog(\$out), STDERRS => runlog(\$err)
+	    );
+
+	if ($proc->wait() != 0) {
+	    printf("%s", $out);
+	    printf(STDERR "%s", $err);
+	    fatal("failed to run: '%s'", join(' ', @$job));
+	}
+    }
+
+    if (grep { $_ eq 'install' } @{$params{BREAKPOINTS}}) {
+	printf("breakpoint: install\n");
+	printf("press ENTER to continue or Ctrl-C to stop");
+	local $| = 1;
+	<STDIN>;
+    }
+
+    if (defined($params{SYNC})) {
+	$pgrp = Minion::System::Pgroup->new([]);
+
+	foreach $instance ($diablo->members()) {
+	    message("syncing '%s' -> 'synced' on %s ('%s')", $params{SYNC},
+		    $instance->public_ip(), $instance->region());
+
+	    $proc = Minion::System::Process->new(sub {
+		$instance->execute(
+		    [ 'rm', '-rf', 'synced' ],
+		    STDERR => '/dev/null'
+		    )->wait();
+
+		exit ($instance->send(
+			  [ $params{SYNC} ],
+			  TARGET => 'synced'
+		      )->wait() >> 8);
+	    });
+
+	    $pgrp->add($proc);
+	}
+
+	if (grep { $_->exitstatus() != 0 } $pgrp->waitall()) {
+	    fatal("failed to  sync '%s'", $params{SYNC});
+	}
+    }
+
+    if (grep { $_ eq 'sync' } @{$params{BREAKPOINTS}}) {
+	printf("breakpoint: sync\n");
+	printf("press ENTER to continue or Ctrl-C to stop");
+	local $| = 1;
+	<STDIN>;
+    }
+
+    message("register diablo secondaries:");
+    foreach $instance ($diablo->members()) {
+	message("  %s ('%s')", $instance->host(), $instance->region());
+    }
+    if ($runner->run($diablo, [ 'behave-diablo', 'secondary' ])->wait() != 0) {
+	fatal("failed to register diablo secondaries");
+    }
+
+    message("register diablo primary:");
+    message("  %s ('%s')", $primary->host(), $primary->region());
+    if ($runner->run(
+	    $primary, [ 'behave-diablo', 'primary', $workload ]
+	)->wait() != 0) {
+
+	fatal("failed to register diablo primary");
+    }
+
+    message("register %s nodes:", $chain);
+    foreach $instance ($nodes->members()) {
+	message("  %s ('%s')", $instance->host(), $instance->region());
+    }
+    if ($runner->run($nodes, [ 'behave-' . $chain ])->wait() != 0) {
+	fatal("failed to register %s nodes", $chain);
+    }
+
+    message("deploying ...");
+    if ($runner->run($gfleet, [ 'deploy' ])->wait() != 0) {
+	fatal("failed to deploy");
+    }
+
+    if (grep { $_ eq 'deploy' } @{$params{BREAKPOINTS}}) {
+	printf("breakpoint: deploy\n");
+	printf("press ENTER to continue or Ctrl-C to stop");
+	local $| = 1;
+	<STDIN>;
+    }
+
+    $pid = $$;
+
+    $SIG{INT} = sub {
+	if ($$ == $pid) {
+	    message("stopping diablo ...");
+	    $runner->run($nodes, [ 'diablo', 'stop' ])->wait();
+
+	    message("killing %s blockchain ...", $chain);
+	    $runner->run($nodes, [ $chain, 'kill' ])->wait();
+	}
+
+	exit (1);
+    };
+
+    message("starting %s blockchain ...", $chain);
+    if ($runner->run($nodes, [ $chain, 'start' ])->wait() != 0) {
+	fatal("failed to start %s blockchain", $chain);
+    }
+
+    if (grep { $_ eq 'chain' } @{$params{BREAKPOINTS}}) {
+	printf("breakpoint: chain\n");
+	printf("press ENTER to continue or Ctrl-C to stop");
+	local $| = 1;
+	<STDIN>;
+    }
+
+    message("starting diablo ...");
+    if ($runner->run($diablo, [ 'diablo', 'start' ])->wait() != 0) {
+	fatal("failed to start diablo", $chain);
+    }
+
+    message("benchmark is running ...");
+    if ($runner->run($diablo, [ 'diablo', 'wait' ])->wait() != 0) {
+	fatal("benchmark failed");
+    }
+
+    if (grep { $_ eq 'benchmark' } @{$params{BREAKPOINTS}}) {
+	printf("breakpoint: benchmark\n");
+	printf("press ENTER to continue or Ctrl-C to stop");
+	local $| = 1;
+	<STDIN>;
+    }
+
+    message("stopping %s blockchain ...", $chain);
+    if ($runner->run($nodes, [ $chain, 'stop' ])->wait() != 0) {
+	fatal("failed to stop %s blockchain", $chain);
+    }
+
+    mkdir($full);
+    message("saving results in '%s/results.json.gz' ...", $full);
+    if ($primary->recv(
+	    [ 'deploy/diablo/primary/results.json.gz'],
+	    TARGET => $full . '/results.json.gz'
+	)->wait() != 0) {
+
+	fatal("failed to save '%s' from %s ('%s') into '%s'",
+	      "deploy/diablo/primary/results.json.gz", $primary->public_ip(),
+	      $primary->region(), $full . '/results.json.gz');
+    }
+
+    system("cd '$full' ; gunzip *.gz");
+    system('cp', $workload, $full . '/workload.yaml');
+
+    message("saving chain name in '%s' ...", $full . '/name.txt');
+    if (!open($fh, '>', $full . '/name.txt')) {
+	fatal("failed to open '%s' : %s", $full . '/name.txt', $!);
+    } else {
+	printf($fh "%s\n", $chain);
+	close($fh);
+    }
+
+    $pgrp = Minion::System::Pgroup->new([]);
+
+    message("saving primary logs from %s in '%s' ...", $primary->host(),
+	    $full);
+
+    $proc = $primary->recv(
+	[ 'deploy/diablo/primary/out' ],
+	TARGET => $full . '/diablo-primary-' . $primary->host() .
+	          '-out.log'
+	);
+    $pgrp->add($proc);
+
+    $proc = $primary->recv(
+	[ 'deploy/diablo/primary/err' ],
+	TARGET => $full . '/diablo-primary-' . $primary->host() .
+	          '-err.log'
+	);
+    $pgrp->add($proc);
+
+    foreach $instance ($diablo->members()) {
+	message("saving secondary logs from %s in '%s' ...",
+		$instance->host(), $full);
+
+	$proc = $instance->recv(
+	    [ 'deploy/diablo/secondary0/out' ],
+	    TARGET => $full . '/diablo-secondary-' . $instance->host() .
+	              '-out.log'
+	    );
+	$pgrp->add($proc);
+
+	$proc = $instance->recv(
+	    [ 'deploy/diablo/secondary0/err' ],
+	    TARGET => $full . '/diablo-secondary-' . $instance->host() .
+	              '-err.log'
+	    );
+	$pgrp->add($proc);
+    }
+
+    foreach $instance ($nodes->members()) {
+	message("saving node logs from %s in '%s' ...",
+		$instance->host(), $full);
+
+	$proc = $instance->recv(
+	    [ 'deploy/' . $chain . '/*/out' ],
+	    TARGET => $full . '/chain-' . $instance->host() .
+	              '-out.log'
+	    );
+	$pgrp->add($proc);
+
+	$proc = $instance->recv(
+	    [ 'deploy/' . $chain . '/*/err' ],
+	    TARGET => $full . '/chain-' . $instance->host() .
+	              '-err.log'
+	    );
+	$pgrp->add($proc);
+    }
+
+    if (grep { $_->exitstatus() != 0 } $pgrp->waitall()) {
+	fatal("failed to save logs");
+    }
+
+    message("saving topology in '%s' ...", $full . '/topology.txt');
+    if (!open($fh, '>', $full . '/topology.txt')) {
+	fatal("failed to open '%s' : %s", $full . '/topology.txt', $!);
+    }
+
+    printf($fh "primary:%s:%s\n", $primary->host(), $primary->region());
+    foreach $instance ($diablo->members()) {
+	printf($fh "secondary:%s:%s\n", $instance->host(),
+	       $instance->region());
+    }
+    foreach $instance ($nodes->members()) {
+	printf($fh "blockchain:%s:%s\n", $instance->host(),
+	       $instance->region());
+    }
+
+    close($fh);
+
+    if (defined($compress)) {
+	message("compressing results in '%s' ...", $params{RESULT});
+
+	if (defined($dir)) {
+	    $wd = getcwd();
+	    chdir($dir);
+	}
+
+	system('tar', '--create', '--auto-compress', '--file',
+	       $base . $compress, $base);
+	system('rm', '-rf', $base);
+
+	if (defined($dir)) {
+	    chdir($wd);
+	}
+    }
+
+    return 0;
+}
+
+sub pos_run
+{
+    my ($chain, $workload, @ids);
+    my (@breakpoints, @installs, $result, $sync, $user, @nodes);
+    my ($id, %fids, $breakpoint, $allocation);
+
+    GetOptionsFromArray(
+	\@_,
+	'b|breakpoint=s' => \@breakpoints,
+	'i|install=s'    => \@installs,
+	'r|result=s'     => \$result,
+	'S|sync=s'       => \$sync,
+	'n|node=s'           => \@nodes,
+	'a|allocation=s' => \$allocation,
+	# 'u|user=s'       => \$user,
+	'v|verbose'      => sub { $VERBOSE += 1; }
+	);
+
+    ($chain, $workload, @ids) = @_;
+
+    if (!defined($chain)) {
+	fatal("missing chain operand");
+    } elsif (!grep { $chain eq $_ } @RUN_CHAINS) {
+	fatal("invalid chain operand: '%s'", $chain);
+    } elsif (!defined($workload)) {
+	fatal("missing workload operand");
+    } elsif (scalar(@ids) == 0) {
+	fatal("missing id operands");
+    }
+
+    foreach $id (@ids) {
+	if ($id =~ /^(sfr(?:-[0-9a-f]+)+)@(..-[^-]+-\d+)$/) {
+	    $fids{$2} = $1;
+	    next;
+	}
+
+	if ($id =~ /^(\d+\.\d+\.\d+\.\d+(?:,\d+\.\d+\.\d+\.\d+)*)@(..-[^-]+-\d+)$/) {
+	    $fids{$2} = $1;
+	    next;
+	}
+
+	fatal("invalid id operand: '%s'", $id);
+    }
+
+    if (scalar(@breakpoints) > 0) {
+	foreach $breakpoint (@breakpoints) {
+	    if (!grep { $breakpoint eq $_ } @RUN_BREAKPOINTS) {
+		fatal("invalid value '%s' for '--breakpoint' option",
+		      $breakpoint);
+	    }
+	}
+    }
+
+    if (scalar(@installs) == 0) {
+	@installs = @RUN_INSTALLS;
+    } else {
+	@installs = map { [ split(',', $_) ] } @installs;
+    }
+
+    if (!defined($result)) {
+	$result = $RUN_RESULT->();
+    } elsif (-d $result) {
+	$result .= '/' . $RUN_RESULT->();
+    }
+
+    if (!defined($sync)) {
+	$sync = $RUN_SYNC;
+    }
+
+    # if (!defined($user)) {
+	# $user = $BOOT_USER;
+    # }
+
+	if (scalar(@nodes) == 0) {
+		fatal("must specify at least one node")
+	}
+
+    return _pos_run(
+	$chain, $workload, \%fids,
+	BREAKPOINTS => \@breakpoints,
+	INSTALLS    => \@installs,
+	RESULT      => $result,
+	SYNC        => $sync,
+	NODES => \@nodes,
+	ALLOCATION => $allocation,
+	# USER        => $user
+	);
+}
 
 # Boot action -----------------------------------------------------------------
 
@@ -924,6 +1393,251 @@ sub boot
 	TYPE        => $type,
 	USER        => $user
 	);
+}
+
+
+# Pos Boot action -----------------------------------------------------------------
+
+sub _pos_boot
+{
+    my (%params) = @_;
+    my ($images, $secgroups, %fleets, $proc, $pgrp, @procs, $fleet, $node);
+    my ($region, $gfleet, $runner, $job, $out, $err, $deadline, $pid, %aopts);
+	my ($allocation, $from, $to);
+
+    $pid = $$;
+
+	$aopts{LOG} = \&cmdlog;
+	$aopts{NODES} = $params{NODES};
+	if (defined($params{KEEP})) {
+		$aopts{KEEP} = $params{KEEP};
+    }
+
+	$deadline = time() + $params{DURATION} * 60;
+	if (defined($params{ALLOCATION})) {
+		$allocation = Minion::Pos::Allocation->new($params{ALLOCATION}, %aopts);
+    } else {
+		if (defined($params{DURATION})) {
+			$aopts{DURATION} = $params{DURATION};
+		}
+		$allocation = Minion::Pos::Allocation->allocate(%aopts)->get();
+	}
+
+	$SIG{INT} = sub {
+		if ($$ == $pid) {
+			# message("Free allocation '%s'", $allocation->id());
+			# $allocation->free()->get();
+		}
+
+		exit (1);
+    };
+
+	message("using allocation: '%s'", $allocation->id());
+
+	if (defined($params{RESET})) {
+	$pgrp = Minion::System::Pgroup->new([]);
+
+	my @nodes = $allocation->nodes();
+	while (my ($index, $node) = each @nodes) {
+	    message("resetting: %s ...", $node->id());
+
+	    $proc = Minion::System::Process->new(sub {
+			# my $res;
+			# do {
+			# $node->reset()->get();
+			# $node->bootstrap()->get();
+			# 	$res = $node->launch([ 'ip', 'a', 'show', 'eth0' ])->get();
+			# } while ($res =~ /does not exist/);
+			# $node->launch([ 'bash', '-c', q(echo 0000:01:00.1 > /sys/bus/pci/drivers/ixgbe/bind) ])->get();
+			# $node->launch([ 'ip', 'link', 'set', 'dev', 'eth-static', 'up' ])->get();
+			$node->launch([ 'bash', '-c', q(ip -6 route add default via $(cat /etc/ilab_control_ipv6)) ])->get();
+			$node->launch([ 'bash', '-c', q(ip -4 route add default via $(cat /etc/ilab_control_ipv4)) ])->get();
+			# $node->launch([ 'bash', '-c', q(ip -6 route del fe80::/64 dev eth-static) ])->get();
+			# $node->launch([ 'bash', '-c', q(ip -6 route add fe80::/64 dev eth-static proto kernel metric 255) ])->get();
+			my $oct = $index + 1;
+			$node->launch([ 'ip', 'addr', 'add', qq(10.20.30.$oct/24), 'dev', 'eth-static' ])->get();
+	    });
+
+	    $pgrp->add($proc);
+	}
+
+    $pgrp->waitall();
+
+	$pgrp = Minion::System::Pgroup->new([]);
+	foreach $from ($allocation->nodes()) {
+	    $proc = Minion::System::Process->new(sub {
+		foreach $to ($allocation->nodes()) {
+			my $private_ip = $to->private_ip();
+			my $host = $to->host();
+			$from->launch([ 'bash', '-c', qq(echo '$private_ip $host' >> /etc/hosts) ])->get();
+		}
+	    });
+	    $pgrp->add($proc);
+	}
+    $pgrp->waitall();
+
+	}
+
+	# install
+
+	$gfleet = Minion::StaticFleet->new([
+		$allocation->nodes()
+    ]);
+
+	$runner = Minion::Run::Runner->new(
+	LOCAL  => [ 'script/local/'  ],
+	REMOTE => [ 'script/remote/' ]
+	);
+
+	if (scalar(@{$params{INSTALLS}}) > 0) {
+	unshift(@{$params{INSTALLS}}, [ 'prepare-install' ]);
+    }
+
+    foreach $job (@{$params{INSTALLS}}) {
+	message("running: '%s' ...", join(' ', @$job));
+
+	$out = '';
+	$err = '';
+	$proc = $runner->run(
+	    $gfleet, $job,
+	    STDOUT  => runlog(\$out), STDERR  => runlog(\$err),
+	    STDOUTS => runlog(\$out), STDERRS => runlog(\$err)
+	    );
+
+	if ($proc->wait() != 0) {
+	    printf("%s", $out);
+	    printf(STDERR "%s", $err);
+	    map { $_->get() } map { $_->cancel() } values(%fleets);
+	    fatal("failed to run '%s'", join(' ', @$job));
+	}
+    }
+
+	# ready
+
+	message("allocation ready:");
+
+	message("  %s", $allocation->id());
+	foreach $node ($allocation->nodes()) {
+	    message("    %s", $node->host());
+	}
+
+    printf("fleet ids: %s\n",
+	   join(' ', map { $fleets{$_}->id() . '@' . $_ } keys(%fleets)));
+
+    message("fleets remain active until: %04d-%02d-%02d :: %02d-%02d-%02d",
+	    (localtime($deadline))[5] + 1900,
+	    (localtime($deadline))[4] + 1,
+	    (localtime($deadline))[3,2,1,0]);
+
+    message("type Ctrl-C to terminate");
+
+    $SIG{INT} = sub {
+		# $pgrp = Minion::System::Pgroup->new([]);
+
+		# foreach $node ($allocation->nodes()) {
+	    # 	message("stopping: %s ...", $node->id());
+
+	    # 	$proc = Minion::System::Process->new(sub {
+		# 		$node->stop()->get();
+		# 	});
+
+	    # 	$pgrp->add($proc);
+		# }
+
+    	# $pgrp->waitall();
+
+	    # message("free allocation '%s'", $allocation->id());
+	    # $allocation->free()->get();
+
+		# message("allocation freed");
+
+		exit (0);
+    };
+
+    sleep($deadline - time());
+
+	# $pgrp = Minion::System::Pgroup->new([]);
+
+	# foreach $node ($allocation->nodes()) {
+	# 	message("stopping: %s ...", $node->id());
+
+	# 	$proc = Minion::System::Process->new(sub {
+	# 		$node->stop()->get();
+	# 	});
+
+	# 	$pgrp->add($proc);
+	# }
+
+	# $pgrp->waitall();
+
+    # message("freeing allocation ...");
+
+    # $allocation->free()->get();
+
+    # message("allocation freed");
+
+    return 0;
+}
+
+sub pos_boot
+{
+    my (@err);
+    my ($duration, $keep, $allocation, $reset, @installs, @nodes, %opts); # , $key, @regions, $disk, $size, $secgroup, $type, $user
+
+    GetOptionsFromArray(
+	\@_,
+	'd|duration=s'       => \$duration,
+	# 'i|image=s'          => \$image,
+	'I|install=s'        => \@installs,
+	'n|node=s'           => \@nodes,
+	'k|keep' => \$keep,
+	'a|allocation=s' => \$allocation,
+	'r|reset' => \$reset,
+	'v|verbose'          => sub { $VERBOSE += 1; }
+	);
+
+    @err = @_;
+
+    if (@err) {
+	fatal("unexpected operand '" . shift(@err) . "'");
+    }
+
+    if (defined($duration)) {
+		if ($duration !~ /^\d+$/) {
+			fatal("invalid value '%s' for option '--duration'", $duration);
+		}
+		$opts{DURATION} = $duration;
+    }
+
+	if (defined($keep)) {
+		$opts{KEEP} = $keep;
+    }
+
+	if (defined($reset)) {
+		$opts{RESET} = $reset;
+    }
+
+	if (defined($allocation)) {
+		$opts{ALLOCATION} = $allocation;
+    }
+
+    # if (!defined($image)) {
+	# $image = $BOOT_IMAGE;
+    # }
+
+    if (scalar(@installs) == 0) {
+	@installs = @BOOT_INSTALLS;
+    } else {
+	@installs = map { [ split(',', $_) ] } @installs;
+    }
+	$opts{INSTALLS} = \@installs;
+
+	if (scalar(@nodes) == 0) {
+		fatal("must specify at least one node")
+	}
+	$opts{NODES} = \@nodes;
+
+    return _pos_boot(%opts);
 }
 
 
@@ -1434,6 +2148,17 @@ sub main
     if ($action eq 'run') {
 	return run(@args);
     }
+
+	if ($action eq 'pos') {
+		($action, @args) = @args;
+		if ($action eq 'boot') {
+		return pos_boot(@args);
+		}
+
+		if ($action eq 'run') {
+		return pos_run(@args);
+    	}
+	}
 
     fatal("unknown action operand: '%s'", $action);
 }

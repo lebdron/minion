@@ -5,6 +5,24 @@
 
 set -e
 
+# Create an install dir if not already there.
+#
+if [ ! -e 'install' ] ; then
+    mkdir 'install'
+fi
+
+if [ ! -e 'install/quorum' ] ; then
+    curl -L https://nextcloud.in.tum.de/index.php/s/jJ4LnKdqoMXPEdR/download/quorum.tar.gz | tar xzf - -C 'install'
+fi
+
+if [ ! -e 'install/geth-accounts' ] ; then
+	curl -L https://nextcloud.in.tum.de/index.php/s/Sxt9ZbqKgsFMcSz/download/geth-accounts.tar.gz | tar xzf - -C 'install'
+fi
+
+exit 0
+
+golang_url="https://go.dev/dl/go1.16.15.linux-$(dpkg --print-architecture).tar.gz"
+
 quorum_url='https://github.com/Consensys/quorum.git'
 quorum_checkout='master'
 
@@ -18,13 +36,9 @@ fi
 
 # Install common utilities as well as golang.
 #
-sudo -n apt-get install -yy 'git' 'make' 'golang'
-
-# Create an install dir if not already there.
-#
-if [ ! -e 'install' ] ; then
-    mkdir 'install'
-fi
+sudo -n apt-get install -yy 'git' 'make'
+curl -L "${golang_url}" | tar --one-top-level='install/go1.16.15' --strip-components=1 -xzf -
+export PATH="${PWD}/install/go1.16.15/bin:${PATH}"
 
 # Clone Quorum from the official repository and build it.
 #

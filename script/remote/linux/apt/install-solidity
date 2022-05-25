@@ -20,15 +20,17 @@ if [ ! -e 'install' ] ; then
 fi
 
 arch=$(uname -m)
+if [ ! -e 'install/solidity' ] ; then
 if [[ $arch = x86_64 ]]; then
     mkdir -p 'install/solidity/build/solc'
 
     curl -L "https://github.com/ethereum/solidity/releases/download/${solidity_checkout}/solc-static-linux" -o 'install/solidity/build/solc/solc'
 
     chmod +x 'install/solidity/build/solc/solc'
-
-    exit 0
 fi
+fi
+
+exit 0
 
 if ! command -v 'sudo' > '/dev/null' ; then
     echo "Cannot find command 'sudo'" >&2

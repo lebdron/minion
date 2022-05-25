@@ -59,7 +59,7 @@ setup_environment() {
     fi
 
 	if [ -d "${move_root}" ] ; then
-	export PATH="${move_root}/target/debug:${PATH}"
+	export PATH="${move_root}/target/release:${PATH}"
 	fi
 }
 
@@ -90,9 +90,13 @@ start_primary() {
     # 	> "${dir}/out" \
     # 	2> "${dir}/err" &
     set -x
+	# ulimit -n 65535
     diablo primary \
-	   -vvv \
+	   -vv \
 	   --env="accounts=${dir}/accounts.yaml" \
+	   --env="contracts=move-contracts" \
+	   --env="contracts=teal-contracts" \
+	   --env="contracts=solidity-contracts" \
 	   --port=${port} \
 	   --output="${dir}/results.json" \
 	   --compress --stat \
@@ -189,8 +193,9 @@ start_secondary() {
 	#        > "${dir}/out" \
 	#        2> "${dir}/err" &
 	set -x
+	# ulimit -n 65535
 	diablo secondary \
-	       -v \
+	       -vv \
 	       --tag="${region}" \
 	       --port=${port} \
 	       ${ip} \

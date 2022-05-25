@@ -9,7 +9,7 @@ use List::Util qw(sum);
 use Minion::System::Pgroup;
 
 
-my $PRIMARY_TCP_PORT = 5000;
+my $PRIMARY_TCP_PORT = 5001;
 
 
 my $FLEET = $_;                        # Global parameter (setup by the Runner)

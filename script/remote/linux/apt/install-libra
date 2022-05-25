@@ -5,6 +5,9 @@
 
 set -e
 
+rust_version='1.52.1'
+rust_url="https://static.rust-lang.org/dist/rust-${rust_version}-$(uname -m)-unknown-linux-gnu.tar.gz"
+
 libra_url='https://github.com/diem/diem.git'
 libra_checkout='testnet'
 
@@ -13,13 +16,20 @@ if ! command -v 'sudo' > '/dev/null' ; then
     exit 1
 fi
 
-sudo -n apt-get install -yy 'clang' 'cmake' 'gcc' 'git' 'libssl-dev' 'make' \
-     'pkg-config' 'rustc'
+sudo -n apt-get -o DPkg::Lock::Timeout=1200 install -yy 'clang' 'cmake' 'gcc' 'git' 'libssl-dev' 'make' \
+     'pkg-config'
+curl -L "${rust_url}" | tar --one-top-level="install/rust${rust_version}install" --strip-components=1 -xzf -
+."/install/rust${rust_version}install/install.sh" --destdir="install/rust${rust_version}" --prefix='' --without=rust-docs --disable-ldconfig
+export PATH="${PWD}/install/rust${rust_version}/bin:${PATH}"
 
 # Create an install dir if not already there.
 #
 if [ ! -e 'install' ] ; then
     mkdir 'install'
+fi
+
+if [ -e 'install/libra' ] ; then
+    sudo rm -rf 'install/libra'
 fi
 
 # Clone Libra from the official repository and build it.
