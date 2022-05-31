@@ -30,8 +30,8 @@ my $RUN_RESULT = sub {
 
 sub benchmark
 {
-    my ($workload, $workers, $output) = @_;
-    my ($pair, $worker, $roles, $blockchain, %results, $result);
+    my ($workload, $workers) = @_;
+    my ($pair, $worker, $roles, $blockchain, %results, $result, $output);
     my ($primary, $secondaries, $chain);
 	my ($nworkload, $id, $contract, $accounts);
 
@@ -72,7 +72,7 @@ sub benchmark
 	$results{$blockchain} = $result;
     }
 
-    encode_results($id, $contract, \%results, $output);
+    encode_results($id, $contract, \%results, '1-' . scalar(@$secondaries) . '-' . scalar(@$chain) . '-' . $id . '.json');
 }
 
 sub benchmark_blockchain
@@ -400,6 +400,9 @@ sub encode_results
     # $data = encode_json($data);
     $data = JSON->new()->ascii()->pretty()->encode($data);
 
+	if (-e $output) {
+	fatal("output file '%s' already exists", $output);
+    }
     if (!open($fh, '>', $output)) {
 	fatal("cannot open output file '%s' : %s", $output, $!);
     }
@@ -580,7 +583,7 @@ sub encode_result
 sub create_workers
 {
     my ($setup) = @_;
-    my (@workers, $worker, $node, $user, $ip, $roles);
+    my (@workers, $worker, $node, $user, $ip, $roles, %nopts);
     my ($grp, $proc, @event, @failed);
 
     $grp = Minion::System::Pgroup->new([]);
@@ -588,26 +591,31 @@ sub create_workers
     foreach $node (@$setup) {
 	($user, $ip, $roles) = @$node;
 
+	$nopts{LOG} = \*STDERR;
+	if (defined($user)) {
+		$nopts{USER} = $user;
+	}
+
 	# $worker = Minion::Ssh->new($ip, USER => $user, LOG => \*STDERR);
-	$worker = Minion::Pos::Node->new($ip, USER => $user, LOG => \*STDERR);
+	$worker = Minion::Pos::Node->new($ip, %nopts);
 	push(@workers, [ $worker, $roles ]);
 
-    	$proc = $worker->execute([ 'true' ]);
-	$grp->add([ $proc, $user, $ip ]);
+    	# $proc = $worker->execute([ 'true' ]);
+	# $grp->add([ $proc, $user, $ip ]);
     }
 
-    while (scalar(@event = $grp->wait()) > 0) {
-	($proc, $user, $ip) = @event;
+    # while (scalar(@event = $grp->wait()) > 0) {
+	# ($proc, $user, $ip) = @event;
 
-	if ($proc->exitstatus() != 0) {
-	    push(@failed, [ $user, $ip ]);
-	}
-    }
+	# if ($proc->exitstatus() != 0) {
+	#     push(@failed, [ $user, $ip ]);
+	# }
+    # }
 
-    if (scalar(@failed) > 0) {
-	fatal("failed to join workers: %s",
-	      join(', ', map { join('@', @$_) } @failed));
-    }
+    # if (scalar(@failed) > 0) {
+	# fatal("failed to join workers: %s",
+	#       join(', ', map { join('@', @$_) } @failed));
+    # }
 
     return \@workers;
 }
@@ -632,6 +640,8 @@ sub read_nodes
 
 	if ($line =~ /^([^@]+)@([^=]*[^=\s])\s*=\s*((?:primary|secondary|chain)(?:\s*,\s*(?:primary|secondary|chain))*)\s*$/) {
 	    ($user, $ip, $roles) = ($1, $2, $3);
+	} elsif ($line =~ /^([^=]*[^=\s])\s*=\s*((?:primary|secondary|chain)(?:\s*,\s*(?:primary|secondary|chain))*)\s*$/) {
+		($ip, $roles) = ($1, $2);
 	} else {
 	    fatal("invalid syntax in '%s': '%s'", $input, $line);
 	}
@@ -815,7 +825,7 @@ EOF
 
 sub main
 {
-    my ($workload, $setup, $output, @err);
+    my ($workload, $setup, @err);
     my ($id, $chain, $contract, $secondaries, $workers, $skip_install);
 
     GetOptionsFromArray(
@@ -824,16 +834,12 @@ sub main
 	'skip-install' => \$skip_install
 	);
 
-    ($workload, $setup, $output, @err) = @_;
+    ($workload, $setup, @err) = @_;
 
     if (!defined($workload)) {
 	fatal('missing <workload-file> operand');
     } elsif (!defined($setup)) {
 	fatal('missing <ip-file> operand');
-    } elsif (!defined($output)) {
-	fatal('missing <output-file> operand');
-    } elsif (-e $output) {
-	fatal("output file '%s' already exists", $output);
     } elsif (@err) {
 	fatal("unexpected operand: '%s'", shift(@err));
     }
@@ -845,7 +851,7 @@ sub main
 	install($workers);
     }
 
-    benchmark($workload, $workers, $output);
+    benchmark($workload, $workers);
 
     return 0;
 

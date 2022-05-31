@@ -12,7 +12,7 @@ if [ ! -e 'install' ] ; then
 fi
 
 if [ ! -e 'install/solana' ] ; then
-	curl -L https://nextcloud.in.tum.de/index.php/s/ZxZx98ewsgDfMT3/download/solana.tar.gz | tar xzf - -C 'install'
+	curl -L https://nextcloud.in.tum.de/index.php/s/q9cj3FHxHyBZDgK/download/solana.tar.gz | tar xzf - -C 'install'
 fi
 
 exit 0
@@ -27,7 +27,7 @@ golang_version='1.17.9'
 golang_url="https://go.dev/dl/go${golang_version}.linux-$(dpkg --print-architecture).tar.gz"
 
 solana_url='https://github.com/solana-labs/solana.git'
-solana_checkout='master'
+solana_checkout='0d369616e7e663355c682a156071ce66ba5a434a'
 
 if ! command -v 'sudo' > '/dev/null' ; then
     echo "Cannot find command 'sudo'" >&2

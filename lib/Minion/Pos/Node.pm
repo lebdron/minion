@@ -51,6 +51,7 @@ sub _init
 
     $self->{__PACKAGE__()}->{_instance_id} = $instance_id;
     $self->{__PACKAGE__()}->{_host} = $instance_id =~ m!^pc[0-9]\.[a-z]$! ? $instance_id . '.ilab' : $instance_id;
+    $self->update();
     # $self->{__PACKAGE__()}->{_private_ip} = $private_ip;
     # $self->{__PACKAGE__()}->{_fleet_id} = $fleet_id;
 
@@ -195,8 +196,6 @@ sub update
     my $ret = $self->launch([ 'ip', '-4', '-o', 'a', 'show', $iface ])->get();
     if ($ret =~ m!inet (.*)/!) {
         $self->{__PACKAGE__()}->{_cache}->{_private_ip} = $1;
-    } else {
-        confess();
     }
 }
 

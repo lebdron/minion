@@ -17,8 +17,8 @@ fi
 
 exit 0
 
-diem_url='https://github.com/lebdron/diem.git'
-diem_checkout='mint-nonblocking'
+diem_url='https://github.com/diem/diem.git'
+diem_checkout='testnet'
 
 move_url='https://github.com/diem/move.git'
 move_checkout='41a075acca3ef60df936ade6c982a6cc302b9546'

@@ -156,6 +156,9 @@ sub generate_setup
 
     printf($ofh "interface: \"ethereum\"\n");
     printf($ofh "\n");
+    printf($ofh "parameters:\n");
+	printf($ofh "  prepare: \"observer\"\n");
+    printf($ofh "\n");
     printf($ofh "endpoints:\n");
 
     foreach $tags (keys(%groups)) {
