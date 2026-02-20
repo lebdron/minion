@@ -1,0 +1,5 @@
+root@10.10.1.21 = chain
+root@10.10.1.22 = chain
+root@10.10.1.23 = chain
+root@10.10.1.24 = chain
+root@10.10.1.11 = primary,secondary

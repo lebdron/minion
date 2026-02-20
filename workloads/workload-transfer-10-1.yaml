@@ -1,0 +1,20 @@
+let:
+  - &n { sample: !integer { from: 2000, to: 2000 } }
+
+  - !loop &a-1  { sample: !account { number: *n, stake: 1000000000 } }
+
+  - &l-1  { sample: !location [ "10\\.128\\.1\\.11$"  ] }
+
+  - &e-1  { sample: !endpoint [ "10\\.128\\.1\\.21$"  ] }
+
+  - &d   { sample: !integer { from: 10, to: 10     } }
+  - &tps { sample: !float   { from: 10.00, to: 10.01 } }
+
+workloads:
+  - number: 1
+    client:
+      location: *l-1
+      view: *e-1
+      behavior:
+        - interaction: !transfer { from: *a-1, to: *a-1 }
+          load: { 0: *tps, *d: 0 }

@@ -11,6 +11,7 @@ use JSON qw(decode_json encode_json);
 use List::Util qw(sum);
 use YAML;
 use File::Basename;
+use Cwd;
 
 use Minion::Run::Runner;
 use Minion::Ssh;
@@ -41,7 +42,7 @@ sub benchmark
 {
     my ($workload, $workers, $blockchain, $mode, $failures, $redundancy) = @_;
     my (%results, $result, $output);
-    my ($id, $contract, $accounts);
+    my ($benchmarkid, $contract, $accounts);
 
     my $primary = undef;
     my $secondaries = [];
@@ -69,7 +70,7 @@ sub benchmark
 		$primary,
 		$secondaries,
 		$chain,
-		$blockchain . '-1-' . scalar(@$secondaries) . '-' . scalar(@$chain) . '-' . $mode . '-' . $failures . '-' . $redundancy . '_' . $RUN_RESULT->(),
+		'results/' . $blockchain . '-1-' . scalar(@$secondaries) . '-' . scalar(@$chain) . '-' . $mode . '-' . $failures . '-' . $redundancy . '_' . $RUN_RESULT->(),
 		$failures,
 		$mode,
 		$redundancy
@@ -94,6 +95,11 @@ sub benchmark_blockchain
     }
 
     if (defined($dir)) {
+		if (!-d $dir) {
+			if (!mkdir($dir)) {
+				fatal("failed to create directory '%s' : %s", $dir, $!);
+			}
+		}
 	$full = $dir . $base;
     } else {
 	$full = $base;
@@ -525,23 +531,28 @@ sub install
     my $fleet = Minion::StaticFleet->new($all);
 
     _wait_or_fatal(
-        $fleet->execute(['sudo', '-n', 'apt-get', '-o', 'DPkg::Lock::Timeout=1200', 'install', '-yy', 'bzip2']),
+        $fleet->execute(['sudo', '-n', 'apt-get', 'update']),
+        "Failed to apt update"
+    );
+
+    _wait_or_fatal(
+        $fleet->execute(['sudo', '-n', 'apt-get', '-o', 'DPkg::Lock::Timeout=1200', 'install', '-yy', 'bzip2', 'curl', 'libdw-dev', 'nodejs', 'npm']),
         "Failed to install bzip2 on one or more workers"
     );
 
-    install_archive($fleet, 'binaries/diablo.tar.gz', 'install/diablo');
-    install_archive($fleet, 'binaries/algorand.tar.gz', 'install/algorand');
-    install_archive($fleet, 'binaries/algorand-tools.tar.gz', 'install/algorand/algorand-tools');
-    install_archive($fleet, 'binaries/aptos.tar.gz', 'install/aptos');
-    install_archive($fleet, 'binaries/aptos-tools.tar.gz', 'install/aptos-tools');
-    install_archive($fleet, 'binaries/avalanche.tar.gz', 'install/avalanche');
-    install_archive($fleet, 'binaries/avalanche-tools.tar.gz', 'install/avalanche-tools');
-    install_archive($fleet, 'binaries/geth-accounts.tar.gz', 'install/geth-accounts');
+    # install_archive($fleet, 'binaries/diablo.tar.gz', 'install/diablo');
+    # install_archive($fleet, 'binaries/algorand.tar.gz', 'install/algorand');
+    # install_archive($fleet, 'binaries/algorand-tools.tar.gz', 'install/algorand/algorand-tools');
+    # install_archive($fleet, 'binaries/aptos.tar.gz', 'install/aptos');
+    # install_archive($fleet, 'binaries/aptos-tools.tar.gz', 'install/aptos-tools');
+    # install_archive($fleet, 'binaries/avalanche.tar.gz', 'install/avalanche');
+    # install_archive($fleet, 'binaries/avalanche-tools.tar.gz', 'install/avalanche-tools');
+    # install_archive($fleet, 'binaries/geth-accounts.tar.gz', 'install/geth-accounts');
     install_archive($fleet, 'binaries/sevm.tar.gz', 'install/sevm');
-    install_archive($fleet, 'binaries/sevm-prepare.tar.gz', 'prepare/sevm/network-10-10000');
-    install_archive($fleet, 'binaries/solana.tar.gz', 'install/solana');
-    install_archive($fleet, 'binaries/solana-accounts.tar.gz', 'install/solana-accounts');
-    install_archive($fleet, 'binaries/solana-libs.tar.gz', '.cache/solana-spl');
+    install_archive($fleet, 'binaries/sevm-tools.tar.gz', 'install/sevm-tools');
+    # install_archive($fleet, 'binaries/solana.tar.gz', 'install/solana');
+    # install_archive($fleet, 'binaries/solana-accounts.tar.gz', 'install/solana-accounts');
+    # install_archive($fleet, 'binaries/solana-libs.tar.gz', '.cache/solana-spl');
 }
 
 sub create_workers

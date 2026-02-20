@@ -3,6 +3,8 @@
 set -e
 
 script_name='deploy-sevm-worker'
+install_root="${HOME}/install/sevm-tools"
+keyfile="${HOME}/install/geth-accounts/accounts.txt"
 deploy_root="${HOME}/deploy/sevm"
 prepare_root="${HOME}/prepare/sevm"
 
@@ -24,6 +26,22 @@ fatal() {
 	echo "corresponding numbers of nodes <behaviors>"
 
 	exit 1
+}
+
+setup_environment() {
+	if [ ! -e "${install_root}" ] ; then
+	fatal "cannot find sevm-tools install at '${install_root}'"
+	fi
+
+	if [ ! -f "${keyfile}" ] ; then
+	fatal "cannot find geth accounts list at '${keyfile}'"
+    fi
+
+	# if [ ! -f "$HOME/helper" ]; then
+	# 	echo "Cannot find helper script" >&2
+	# 	exit 1
+	# fi
+	# . "$HOME/helper"
 }
 
 list_blockchain_nodes() {
@@ -69,50 +87,6 @@ prepare() {
 
 # Generate action - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-replace_genesis_ips() {
-  local GENESIS="$1"
-  local NEWIPS="$2"
-
-  if [[ ! -f "$GENESIS" ]]; then
-	echo "Cannot find genesis file '$GENESIS'" >&2
-    return 1
-  fi
-
-  if [[ ! -f "$NEWIPS" ]]; then
-	echo "Cannot find new IPs file '$NEWIPS'" >&2
-    return 1
-  fi
-
-  local i=1
-
-  while IFS=":" read -r new_ip _; do
-    [[ -z "$new_ip" ]] && continue
-
-    new_ip=$(echo "$new_ip" | xargs)
-
-    local old_ip="127.0.0.$i"
-    local old_hex old_len old_len_byte padlen_old old_final
-
-    old_hex=$(echo -n "$old_ip" | xxd -p | tr -d '\n')
-    old_len=${#old_ip}
-    old_len_byte=$(printf "%02x" $((old_len * 2)))
-    padlen_old=$((64 - (${#old_hex} + 2)))
-    old_final="${old_hex}$(printf "%0${padlen_old}d" 0)${old_len_byte}"
-
-    local new_hex new_len new_len_byte padlen_new new_final
-
-    new_hex=$(echo -n "$new_ip" | xxd -p | tr -d '\n')
-    new_len=${#new_ip}
-    new_len_byte=$(printf "%02x" $((new_len * 2)))
-    padlen_new=$((64 - (${#new_hex} + 2)))
-    new_final="${new_hex}$(printf "%0${padlen_new}d" 0)${new_len_byte}"
-
-    sed -i "s/${old_final}/${new_final}/g" "$GENESIS"
-
-    ((i++))
-  done < "$NEWIPS"
-}
-
 generate() {
 	if [ $# -lt 1 ] ; then
 	fatal "missing behaviors operand"
@@ -123,6 +97,8 @@ generate() {
 	local behaviors="${HOME}/$1" ; shift
 	local netroot="${deploy_root}/network"
 
+	setup_environment
+
 	if [ -e "${netroot}" ] ; then
 	rm -rf "${netroot}"
 	fi
@@ -132,16 +108,17 @@ generate() {
 	local prepared_path="${prepare_root}/network-${numnode}-${numaccounts}"
 
 	if [ ! -e "${prepared_path}" ] ; then
-		echo "Not supported: prepared path '${prepared_path}' does not exist" >&2
-		exit 1
+		pushd "${install_root}"
+
+    	export PATH="${PWD}/node_modules/.bin:${PATH}"
+
+		npx ts-node scripts/mygenesis.ts "${prepared_path}" "${behaviors}" "${keyfile}"
+
+		popd
+	else
+		echo "Using already prepared network at '${prepared_path}'"
 	fi
-
 	cp -R "${prepared_path}" "${netroot}"
-
-	replace_genesis_ips "${netroot}/n0/data/database/genesis.json" "${behaviors}"
-	for i in $(seq 1 $(( numnode - 1 )) ) ; do
-	    cp "${netroot}/n0/data/database/genesis.json" "${netroot}/n${i}/data/database/genesis.json"
-	done
 
 	tar -C "${deploy_root}" -czf "${netroot}.tar.gz" 'network'
 

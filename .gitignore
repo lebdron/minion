@@ -5,3 +5,7 @@ Makefile
 Makefile.old
 blib/
 pm_to_blib
+.direnv
+binaries
+minion.*
+results
