@@ -407,13 +407,32 @@ if __name__ == "__main__":
         description="Analyzes throughput, latency, and success stats from a results JSON file.",
         formatter_class=argparse.RawTextHelpFormatter
     )
-    parser.add_argument("json_file", type=str, help="Path to the JSON file containing the results.")
+    parser.add_argument("json_file", type=str, help="Path to the JSON file containing the results.", nargs='?')
     parser.add_argument("--start-index", type=int, metavar="START", default=0,
                         help="Optional: Start throughput analysis from this window index (0-based).\nDefault is 0.")
     parser.add_argument("--end-index", type=int, metavar="END", default=None,
                         help="Optional: End throughput analysis at this window index (inclusive).\nDefault is the last window.")
     parser.add_argument("--plot", action="store_true",
                         help="Optional: Generate plots for latency and throughput.")
+    parser.add_argument("--latest", action="store_true",
+                        help="Optional: Analyze the most recently modified JSON file in the 'results' directory.")
 
     args = parser.parse_args()
+
+    if args.latest:
+        results_dir = "results"
+        if not os.path.isdir(results_dir):
+            print(f"Error: The directory '{results_dir}' does not exist.", file=sys.stderr)
+            sys.exit(1)
+        archives = [os.path.join(results_dir, f) for f in os.listdir(results_dir) if f.endswith(".tar.gz")]
+        if not archives:
+            print(f"Error: No log archive found in '{results_dir}'.", file=sys.stderr)
+            sys.exit(1)
+        latest_file = max(archives, key=os.path.getmtime)
+        args.json_file = latest_file
+    elif not args.json_file:
+        print("Error: No JSON file specified. Use --latest to analyze the most recent file or provide a file path.", file=sys.stderr)
+        parser.print_help()
+        sys.exit(1)
+
     analyze_results(args.json_file, args.start_index, args.end_index, args.plot)
