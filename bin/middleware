@@ -251,7 +251,7 @@ sub benchmark_blockchain
 	close($fh);
     }
 
-	if (0) {
+	if (1) {
 
     $pgrp = Minion::System::Pgroup->new([]);
 

@@ -130,7 +130,7 @@ def generate_latency_plot(latencies_ms: list, output_filename: str):
 
     try:
         plt.savefig(output_filename, dpi=150, bbox_inches='tight')
-        print(f"Plot successfully saved.")
+        print("Plot successfully saved.")
     except Exception as e:
         print(f"Error saving plot: {e}", file=sys.stderr)
     finally:
@@ -175,10 +175,56 @@ def print_throughput_stats(data: dict, start_index: int, end_index: int | None):
     print(header)
 
     for key, value in stats.items():
-        if isinstance(value, str): print(f"  {key:<23}: {value}")
-        elif isinstance(value, int): print(f"  {key:<23}: {value}")
-        else: print(f"  {key:<23}: {value:.2f}")
+        if isinstance(value, str): 
+            print(f"  {key:<23}: {value}")
+        elif isinstance(value, int): 
+            print(f"  {key:<23}: {value}")
+        else: 
+            print(f"  {key:<23}: {value:.2f}")
     print("-----------------------------")
+    
+def generate_throughput_plot(throughput_data: list, start_index: int, end_index: int | None, output_filename: str):
+    """Generates and saves a line plot of throughput over time for the specified slice."""
+    if not PLOT_LIBS_AVAILABLE:
+        print("\nPlotting libraries matplotlib and seaborn are not installed.", file=sys.stderr)
+        print("Please install them to use the plotting features:", file=sys.stderr)
+        print("pip install matplotlib seaborn", file=sys.stderr)
+        return
+
+    if not isinstance(throughput_data, list) or not throughput_data:
+        print("\nWarning: No throughput data available to plot.", file=sys.stderr)
+        return
+
+    if start_index < 0 or (end_index is not None and end_index < start_index):
+        print(f"\nError: Invalid index range (start={start_index}, end={end_index}). Cannot generate plot.", file=sys.stderr)
+        return
+
+    slice_end = (end_index + 1) if end_index is not None else None
+    throughput_data_slice = throughput_data[start_index:slice_end]
+
+    if not throughput_data_slice:
+        print("\nWarning: The specified slice resulted in an empty dataset. No plot generated.", file=sys.stderr)
+        return
+
+    x_values = np.arange(start_index, start_index + len(throughput_data_slice))
+    y_values = np.array(throughput_data_slice)
+
+    sns.set_theme(style="whitegrid")
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    ax.plot(x_values, y_values, marker='o', linestyle='-', color='blue')
+    ax.set_title("Throughput Over Time", fontsize=16, fontweight='bold')
+    ax.set_xlabel("Time Window Index", fontsize=12)
+    ax.set_ylabel("Throughput (tx/s)", fontsize=12)
+    ax.grid(True, which='both', linestyle='--', linewidth=0.5)
+
+    try:
+        plt.savefig(output_filename, dpi=150, bbox_inches='tight')
+        print(f"Throughput plot successfully saved to '{output_filename}'.")
+    except Exception as e:
+        print(f"Error saving throughput plot: {e}", file=sys.stderr)
+    finally:
+        plt.close(fig) # Free up memory
 
 def print_latency_stats(data: dict):
     """Prints statistics for AllTxLatencies, assuming units are in ms."""
@@ -197,8 +243,10 @@ def print_latency_stats(data: dict):
               "P95 (ms)": np.percentile(latency_array_ms, 95), "P99 (ms)": np.percentile(latency_array_ms, 99) }
 
     for key, value in stats.items():
-        if isinstance(value, int): print(f"  {key:<23}: {value}")
-        else: print(f"  {key:<23}: {value:.3f}")
+        if isinstance(value, int): 
+            print(f"  {key:<23}: {value}")
+        else: 
+            print(f"  {key:<23}: {value:.3f}")
     print("------------------------------------------------")
 
 def print_summary_stats(data: dict):
@@ -271,7 +319,7 @@ def print_observer_stats(observer_data_list: list, blockchain_name: str | None, 
 
     print("------------------------------------------")
 
-def analyze_results(json_file_path: str, start_index: int, end_index: int | None, plot_filename: str | None):
+def analyze_results(json_file_path: str, start_index: int, end_index: int | None, plot: bool = False):
     """Main function to orchestrate the analysis of the results file."""
     data = None
     observer_data_list = []
@@ -334,7 +382,7 @@ def analyze_results(json_file_path: str, start_index: int, end_index: int | None
         print(f"Error: The file '{json_file_path}' was not found.", file=sys.stderr)
         sys.exit(1)
     except json.JSONDecodeError:
-        print(f"Error: The file content is not valid JSON.", file=sys.stderr)
+        print("Error: The file content is not valid JSON.", file=sys.stderr)
         sys.exit(1)
     except tarfile.ReadError:
         print(f"Error: Could not read '{json_file_path}'. It may be a corrupted tar.gz file.", file=sys.stderr)
@@ -349,8 +397,10 @@ def analyze_results(json_file_path: str, start_index: int, end_index: int | None
     total_success = processed_data.get("TotalSuccess", 0)
     print_observer_stats(observer_data_list, blockchain_name, total_success)
 
-    if plot_filename:
-        generate_latency_plot(processed_data.get("AllTxLatencies"), plot_filename)
+    if plot:
+        plot_prefix = os.path.splitext(os.path.basename(json_file_path))[0] + "_"
+        generate_latency_plot(processed_data.get("AllTxLatencies"), f"results/{plot_prefix}latency_plot.pdf")
+        generate_throughput_plot(processed_data.get("TotalThroughputOverTime"), start_index, end_index, f"results/{plot_prefix}throughput_plot.pdf")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -362,8 +412,8 @@ if __name__ == "__main__":
                         help="Optional: Start throughput analysis from this window index (0-based).\nDefault is 0.")
     parser.add_argument("--end-index", type=int, metavar="END", default=None,
                         help="Optional: End throughput analysis at this window index (inclusive).\nDefault is the last window.")
-    parser.add_argument("--plot", type=str, metavar="FILENAME", default=None,
-                        help="Optional: Generate a violin plot of latency distribution and save it to FILENAME (e.g., plot.png).")
+    parser.add_argument("--plot", action="store_true",
+                        help="Optional: Generate plots for latency and throughput.")
 
     args = parser.parse_args()
     analyze_results(args.json_file, args.start_index, args.end_index, args.plot)

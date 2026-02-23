@@ -107,17 +107,14 @@ generate() {
 	local numaccounts=10000
 	local prepared_path="${prepare_root}/network-${numnode}-${numaccounts}"
 
-	if [ ! -e "${prepared_path}" ] ; then
-		pushd "${install_root}"
+	pushd "${install_root}"
 
-    	export PATH="${PWD}/node_modules/.bin:${PATH}"
+	export PATH="${PWD}/node_modules/.bin:${PATH}"
 
-		npx ts-node scripts/mygenesis.ts "${prepared_path}" "${behaviors}" "${keyfile}"
+	npx ts-node scripts/mygenesis.ts "${prepared_path}" "${behaviors}" "${keyfile}"
 
-		popd
-	else
-		echo "Using already prepared network at '${prepared_path}'"
-	fi
+	popd
+
 	cp -R "${prepared_path}" "${netroot}"
 
 	tar -C "${deploy_root}" -czf "${netroot}.tar.gz" 'network'
