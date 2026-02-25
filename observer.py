@@ -72,8 +72,12 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
 	node = nodes[0]
 
 	print(f'connecting to {server_address[0]} port {server_address[1]}, script {script}')
-	sock.connect(server_address)
-	print(f'connected')
+	try:
+		sock.connect(server_address)
+	except:
+		print(f'failed to connect to {server_address[0]} port {server_address[1]}')
+		sys.exit(1)
+	print('connected')
 
 	msg = recv_exact(sock, 8)
 	(duration,) = struct.unpack('<d', msg)

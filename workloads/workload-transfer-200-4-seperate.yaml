@@ -1,0 +1,50 @@
+let:
+  - &n { sample: !integer { from: 400, to: 400 } }
+
+  - !loop &a-1  { sample: !account { number: *n, stake: 1000000000 } }
+  - !loop &a-2  { sample: !account { number: *n, stake: 1000000000 } }
+  - !loop &a-3  { sample: !account { number: *n, stake: 1000000000 } }
+  - !loop &a-4  { sample: !account { number: *n, stake: 1000000000 } }
+
+  - &l-1  { sample: !location [ "10\\.128\\.1\\.11$"  ] }
+
+  - &e-1  { sample: !endpoint [ "10\\.128\\.1\\.21$"  ] }
+  - &e-2  { sample: !endpoint [ "10\\.128\\.1\\.22$"  ] }
+  - &e-3  { sample: !endpoint [ "10\\.128\\.1\\.23$"  ] }
+  - &e-4  { sample: !endpoint [ "10\\.128\\.1\\.24$"  ] }
+
+  - &d   { sample: !integer { from: 1000, to: 1000     } }
+  - &tps { sample: !float   { from: 200.00, to: 200.01 } }
+
+workloads:
+  - number: 1
+    client:
+      location: *l-1
+      view: *e-1
+      behavior:
+        - interaction: !transfer { from: *a-1, to: *a-1 }
+          load: { 0: *tps, *d: 0 }
+  
+  - number: 1
+    client:
+      location: *l-1
+      view: *e-2
+      behavior:
+        - interaction: !transfer { from: *a-2, to: *a-2 }
+          load: { 0: *tps, *d: 0 }
+  
+  - number: 1
+    client:
+      location: *l-1
+      view: *e-3
+      behavior:
+        - interaction: !transfer { from: *a-3, to: *a-3 }
+          load: { 0: *tps, *d: 0 }
+  
+  - number: 1
+    client:
+      location: *l-1
+      view: *e-4
+      behavior:
+        - interaction: !transfer { from: *a-4, to: *a-4 }
+          load: { 0: *tps, *d: 0 }

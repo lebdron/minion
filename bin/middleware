@@ -64,7 +64,7 @@ sub benchmark
 	}
     }
 
-	$result = benchmark_blockchain(
+	benchmark_blockchain(
 		$blockchain,
 		$workload,
 		$primary,
@@ -179,55 +179,19 @@ sub benchmark_blockchain
 	fatal("failed to start blockchain");
     }
 
-    if ($runner->run($diablo, [ 'diablo', 'start' ])->wait() != 0) {
-	fatal("failed to start diablo");
+	if ($runner->run($chain, [ 'behave-diablo-observer' ])->wait() != 0) {
+	fatal("failed to register diablo observers");
     }
 
-	if ($runner->run($chain, [ 'diablo-observer', 'start' ])->wait() != 0) {
-	fatal("failed to start diablo observers");
-    }
-
-    if ($runner->run($diablo, [ 'diablo', 'wait' ])->wait() != 0) {
-	fatal("failed to wait diablo");
-    }
-
-    # printf("breakpoint: blockchain started\n");
-	# printf("press ENTER to continue or Ctrl-C to stop");
-	# local $| = 1;
-	# <STDIN>;
+	my @runs = (1..100);
+	for my $run_number (@runs){
+		run_benchmark_and_collect_results($runner, $diablo, $chain, $primary, $secondaries, $all, $full, $run_number, $workload);
+	}
 
     if ($runner->run($chain, [ $blockchain, 'stop' ])->wait() != 0) {
 	fatal("failed to stop blockchain");
     }
 
-	if ($runner->run($chain, [ 'diablo-observer', 'stop' ])->wait() != 0) {
-	fatal("failed to stop diablo observers");
-    }
-
-	# if (0) {
-
-    $path = tempdir('middleware-result.XXXXXX', SUFFIX => '.d', CLEANUP => 1);
-
-    if ($primary->recv([ 'deploy/diablo/primary/results.json.gz' ],
-		       TARGET => $path)->wait() != 0) {
-	fatal("failed to receive results");
-    }
-
-    if (!gunzip($path . '/results.json.gz' => $path . '/results.json')) {
-	fatal("failed to decompress results");
-    }
-
-	mkdir($full);
-    printf("saving results in '%s/results.json.gz' ...\n", $full);
-    if ($primary->recv(
-	    [ 'deploy/diablo/primary/results.json.gz'],
-	    TARGET => $full . '/results.json.gz'
-	)->wait() != 0) {
-
-	fatal("failed to save '%s' from %s ('%s') into '%s'",
-	      "deploy/diablo/primary/results.json.gz", $primary->id(),
-	      $primary->region(), $full . '/results.json.gz');
-    }
 
 	printf("saving setup.yaml in '%s/setup.yaml' ...\n", $full);
     if ($primary->recv(
@@ -240,7 +204,6 @@ sub benchmark_blockchain
 	      $primary->region(), $full . '/setup.yaml');
     }
 
-    system("cd '$full' ; gunzip *.gz");
     system('cp', $workload, $full . '/workload.yaml');
 
     printf("saving blockchain name in '%s' ...\n", $full . '/name.txt');
@@ -250,6 +213,9 @@ sub benchmark_blockchain
 	printf($fh "%s\n", $blockchain);
 	close($fh);
     }
+
+
+	# if (0) {
 
 	if (1) {
 
@@ -273,22 +239,22 @@ sub benchmark_blockchain
     $pgrp->add($proc);
 
     foreach $instance (@$secondaries) {
-	printf("saving secondary logs from %s in '%s' ...\n",
-		$instance->id(), $full);
+		printf("saving secondary logs from %s in '%s' ...\n",
+			$instance->id(), $full);
 
-	$proc = $instance->recv(
-	    [ 'deploy/diablo/secondary0/out' ],
-	    TARGET => $full . '/diablo-secondary-' . $instance->id() .
-	              '-out.log'
-	    );
-	$pgrp->add($proc);
+		$proc = $instance->recv(
+			[ 'deploy/diablo/secondary0/out' ],
+			TARGET => $full . '/diablo-secondary-' . $instance->id() .
+					'-out.log'
+			);
+		$pgrp->add($proc);
 
-	$proc = $instance->recv(
-	    [ 'deploy/diablo/secondary0/err' ],
-	    TARGET => $full . '/diablo-secondary-' . $instance->id() .
-	              '-err.log'
-	    );
-	$pgrp->add($proc);
+		$proc = $instance->recv(
+			[ 'deploy/diablo/secondary0/err' ],
+			TARGET => $full . '/diablo-secondary-' . $instance->id() .
+					'-err.log'
+			);
+		$pgrp->add($proc);
     }
 
     foreach $instance (@$chain) {
@@ -359,8 +325,76 @@ sub benchmark_blockchain
 	}
     }
 	# }
+}
 
-    return ($path . '/results.json');
+sub run_benchmark_and_collect_results
+{
+    my ($runner, $diablo, $chain, $primary, $secondaries, $all, $full, $run_number, $workload) = @_;
+	my ($path);
+
+    if ($runner->run($diablo, [ 'diablo', 'start' ])->wait() != 0) {
+	fatal("failed to start diablo");
+    }
+
+	if ($runner->run($chain, [ 'diablo-observer', 'start' ])->wait() != 0) {
+	fatal("failed to start diablo observers");
+    }
+
+    if ($runner->run($diablo, [ 'diablo', 'wait' ])->wait() != 0) {
+	fatal("failed to wait diablo");
+    }
+
+	if ($runner->run($chain, [ 'diablo-observer', 'stop' ])->wait() != 0) {
+	fatal("failed to stop diablo observers");
+    }
+
+	if ($runner->run($chain, [ 'diablo', 'stop' ])->wait() != 0) {
+	fatal("failed to stop diablo");
+    }
+
+	mkdir($full);
+    printf("saving results in '%s/results.json.gz' ...\n", $full);
+    if ($primary->recv(
+	    [ 'deploy/diablo/primary/results.json.gz'],
+	    TARGET => $full . '/results.json.gz'
+	)->wait() != 0) {
+
+	fatal("failed to save '%s' from %s ('%s') into '%s'",
+	      "deploy/diablo/primary/results.json.gz", $primary->id(),
+	      $primary->region(), $full . '/results.json.gz');
+    }
+
+    system("cd '$full' ; gunzip -c results.json.gz > results" . $run_number . '.json');
+	
+	$primary->execute(
+			[ 'rm', '-rf', 'deploy/diablo' ],
+			STDERR => '/dev/null'
+		)->wait();
+
+    foreach my $instance (@$secondaries) {
+		$instance->execute(
+			[ 'rm', '-rf', 'deploy/diablo' ],
+			STDERR => '/dev/null'
+		)->wait();
+    }
+
+	# if ($runner->run([ $primary ],
+	# 	     [ 'behave-diablo', 'primary', $workload ])->wait() != 0) {
+	# fatal("failed to register diablo primary");
+    # }
+
+    # if ($runner->run($secondaries,
+	# 	     [ 'behave-diablo', 'secondary' ])->wait() != 0) {
+	# fatal("failed to register diablo secondaries");
+    # }
+
+	if ($runner->run($all, [ 'deploy-diablo' ])->wait() != 0) {
+		die ("failed to deploy diablo");
+	}
+
+	# if ($runner->run($all, [ 'deploy-diablo-observer', $blockchain, $failures, $mode ])->wait() != 0) {
+    # die ("failed to deploy diablo observers");
+	# }
 }
 
 sub build
