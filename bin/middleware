@@ -40,7 +40,7 @@ my $RUN_RESULT = sub {
 
 sub benchmark
 {
-    my ($workload, $workers, $blockchain, $mode, $failures, $redundancy) = @_;
+    my ($workload, $workers, $blockchain, $mode, $failures, $redundancy, $run_count) = @_;
     my (%results, $result, $output);
     my ($benchmarkid, $contract, $accounts);
 
@@ -73,13 +73,14 @@ sub benchmark
 		'results/' . $blockchain . '-1-' . scalar(@$secondaries) . '-' . scalar(@$chain) . '-' . $mode . '-' . $failures . '-' . $redundancy . '_' . $RUN_RESULT->(),
 		$failures,
 		$mode,
-		$redundancy
+		$redundancy,
+		$run_count
 	);
 }
 
 sub benchmark_blockchain
 {
-    my ($blockchain, $workload, $primary, $secondaries, $chain, $result, $failures, $mode, $redundancy) = @_;
+    my ($blockchain, $workload, $primary, $secondaries, $chain, $result, $failures, $mode, $redundancy, $run_count) = @_;
     my ($runner, $worker, $all, $diablo, $path, $instance, $proc, $pgrp, $wd);
     my ($dir, $base, $full, $compress, $fh);
 
@@ -183,7 +184,7 @@ sub benchmark_blockchain
 	fatal("failed to register diablo observers");
     }
 
-	my @runs = (1..100);
+	my @runs = (1..$run_count);
 	for my $run_number (@runs){
 		run_benchmark_and_collect_results($runner, $diablo, $chain, $primary, $secondaries, $all, $full, $run_number, $workload);
 	}
@@ -215,9 +216,7 @@ sub benchmark_blockchain
     }
 
 
-	# if (0) {
-
-	if (1) {
+	if (0) {
 
     $pgrp = Minion::System::Pgroup->new([]);
 
@@ -734,7 +733,7 @@ EOF
 
 sub main
 {
-    my ($workload, $setup, $blockchain, $mode, $failures, $redundancy, @err);
+    my ($workload, $setup, $blockchain, $mode, $failures, $redundancy, $run_count, @err);
     my ($id, $chain, $contract, $secondaries, $workers, $skip_install, $skip_build);
 
     GetOptionsFromArray(
@@ -744,7 +743,7 @@ sub main
 	'skip-build' => \$skip_build
 	);
 
-    ($workload, $setup, $blockchain, $mode, $failures, $redundancy, @err) = @_;
+    ($workload, $setup, $blockchain, $mode, $failures, $redundancy, $run_count, @err) = @_;
 
     if (!defined($workload)) {
 	fatal('missing <workload-file> operand');
@@ -760,6 +759,8 @@ sub main
 	fatal('missing <failures> operand');
 	} elsif (!defined($redundancy)) {
 	fatal('missing <redundancy> operand');
+	} elsif (!defined($run_count)) {
+	fatal('missing <run_count> operand');
     } elsif (@err) {
 	fatal("unexpected operand: '%s'", shift(@err));
     }
@@ -775,7 +776,7 @@ sub main
 	install($workers);
     }
 
-    benchmark($workload, $workers, $blockchain, $mode, $failures, $redundancy);
+    benchmark($workload, $workers, $blockchain, $mode, $failures, $redundancy, $run_count);
 
     return 0;
 }

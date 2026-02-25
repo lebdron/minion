@@ -266,6 +266,7 @@ def print_summary_stats(data: dict):
     print(f"  {'Failed':<23}: {fails}")
     print(f"  {'Success Rate':<23}: {success_rate:.2f}%")
     print("-----------------------")
+    return success_rate
 
 def print_observer_stats(observer_data_list: list, blockchain_name: str | None, total_success: int):
     """Prints aggregated P2P bandwidth statistics from observer files."""
@@ -321,7 +322,7 @@ def print_observer_stats(observer_data_list: list, blockchain_name: str | None, 
 
 def analyze_results(json_file_path: str, start_index: int, end_index: int | None, plot: bool = False):
     """Main function to orchestrate the analysis of the results file."""
-    data = None
+    datas = []
     observer_data_list = []
     blockchain_name = None
 
@@ -337,9 +338,11 @@ def analyze_results(json_file_path: str, start_index: int, end_index: int | None
                     
                     basename = os.path.basename(member.name)
                     
-                    if basename == 'results.json':
-                        with tar.extractfile(member) as f:
-                            data = json.load(f)
+                    if basename.endswith('.json') and basename.startswith('results'):
+                        file_number = int(basename[len('results'):-len('.json')])
+                        if len(datas) < file_number:
+                            datas.extend([None] * (file_number - len(datas)))
+                        datas[file_number - 1] = member.name
                         print(f"  Found '{member.name}' in archive.")
                     elif basename == 'name.txt':
                         with tar.extractfile(member) as f:
@@ -352,13 +355,13 @@ def analyze_results(json_file_path: str, start_index: int, end_index: int | None
                         except Exception as e:
                             print(f"Warning: Could not load {member.name}: {e}", file=sys.stderr)
 
-                if not data:
-                    print(f"Error: Could not find a 'results.json' file inside '{json_file_path}'.", file=sys.stderr)
+                if len(datas) == 0 or any(d is None for d in datas):
+                    print(f"Error: Could not find all 'results.json' files inside '{json_file_path}'.", file=sys.stderr)
                     sys.exit(1)
         else:
             # Original logic for plain JSON files
             with open(json_file_path, 'r') as f:
-                data = json.load(f)
+                datas.append(json.load(f))
 
             base_dir = os.path.dirname(json_file_path) or "."
             
@@ -388,19 +391,58 @@ def analyze_results(json_file_path: str, start_index: int, end_index: int | None
         print(f"Error: Could not read '{json_file_path}'. It may be a corrupted tar.gz file.", file=sys.stderr)
         sys.exit(1)
 
-    # Pre-process the data. This handles both old and new formats.
-    processed_data = preprocess_new_format_data(data)
+    success_rates = []
+    for (index, data) in enumerate(datas):
+        try:
+            with tarfile.open(json_file_path, 'r:gz') as tar:
+                member = tar.getmember(data)
+                with tar.extractfile(member) as f:
+                    data = json.load(f)
+        except Exception as e:
+            print(f"Error loading '{data}' from archive: {e}", file=sys.stderr)
+            continue
+        # Pre-process the data. This handles both old and new formats.
+        processed_data = preprocess_new_format_data(data)
 
-    print_throughput_stats(processed_data, start_index, end_index)
-    print_latency_stats(processed_data)
-    print_summary_stats(processed_data)
-    total_success = processed_data.get("TotalSuccess", 0)
-    print_observer_stats(observer_data_list, blockchain_name, total_success)
+        print_throughput_stats(processed_data, start_index, end_index)
+        print_latency_stats(processed_data)
+        success_rate = print_summary_stats(processed_data)
+        total_success = processed_data.get("TotalSuccess", 0)
+        print_observer_stats(observer_data_list, blockchain_name, total_success)
 
-    if plot:
-        plot_prefix = os.path.splitext(os.path.basename(json_file_path))[0] + "_"
-        generate_latency_plot(processed_data.get("AllTxLatencies"), f"results/{plot_prefix}latency_plot.pdf")
-        generate_throughput_plot(processed_data.get("TotalThroughputOverTime"), start_index, end_index, f"results/{plot_prefix}throughput_plot.pdf")
+        if plot:
+            plot_prefix = os.path.splitext(os.path.basename(json_file_path))[0] + "_" + f"results{index+1}_" if len(datas) > 1 else ""
+            generate_latency_plot(processed_data.get("AllTxLatencies"), f"results/{plot_prefix}latency_plot.pdf")
+            generate_throughput_plot(processed_data.get("TotalThroughputOverTime"), start_index, end_index, f"results/{plot_prefix}throughput_plot.pdf")
+            
+        success_rates.append(success_rate)
+        
+    print("\n--- Success Rates for All Files ---")
+    print(success_rates)
+    
+    if len(datas) > 1:
+        if not PLOT_LIBS_AVAILABLE:
+            print("\nPlotting libraries matplotlib and seaborn are not installed.", file=sys.stderr)
+            print("Please install them to use the plotting features:", file=sys.stderr)
+            print("pip install matplotlib seaborn", file=sys.stderr)
+        else:
+            plt.figure(figsize=(8, 6))
+            plt.bar(range(1, len(success_rates) + 1), success_rates, color='green')
+            plt.xlabel('Results File Index', fontsize=12)
+            plt.ylabel('Success Rate (%)', fontsize=12)
+            plt.title('Success Rates Across All Results Files', fontsize=16, fontweight='bold')
+            plt.ylim(0, 100)
+            plt.xticks(range(1, len(success_rates) + 1))
+            plt.grid(axis='y', linestyle='--', linewidth=0.5)
+
+            try:
+                plot_prefix = os.path.splitext(os.path.basename(json_file_path))[0] + "_"
+                plt.savefig(f"results/{plot_prefix}success_rates_summary.pdf", dpi=150, bbox_inches='tight')
+                print(f"\nSummary success rates plot saved to 'results/{plot_prefix}success_rates_summary.pdf'.")
+            except Exception as e:
+                print(f"Error saving summary plot: {e}", file=sys.stderr)
+            finally:
+                plt.close()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
